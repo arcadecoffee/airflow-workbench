@@ -13,6 +13,9 @@ airflow users create \
     --role Admin \
     --email spiderman@superhero.org
 
+export AIRFLOW__CORE__DAGS_FOLDER=${PWD}/dags
+export AIRFLOW__CORE__PLUGINS_FOLDER=${PWD}/plugins
+
 # start the web server, default port is 8080
 airflow webserver --port 8080 -D
 
