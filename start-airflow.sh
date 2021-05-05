@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export AIRFLOW_HOME=${PWD}/airflow
+export SF_ENV=local
 
 # initialize the database
 airflow db init
