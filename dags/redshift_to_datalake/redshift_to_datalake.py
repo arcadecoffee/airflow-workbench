@@ -1,20 +1,19 @@
 import os
-import uuid
 from pathlib import Path
-
-from pprint import pprint
 
 import yaml
 
 from airflow import DAG
 from airflow.operators.dummy import DummyOperator
-from airflow.utils.dates import days_ago
-
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, get_current_context
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.amazon.aws.transfers.redshift_to_s3 import RedshiftToS3Operator
+from airflow.utils.dates import days_ago
 
-from redshift_to_datalake.helpers.datatype_converter import convert_datatype
+from airflow.models.connection import Connection
+
+from helpers.airflow_helpers import push_values, override_postgres_cursor
+from helpers.datatype_converter import convert_datatype
 
 
 base_dir = Path(__file__).resolve().parent
@@ -29,39 +28,36 @@ unload_bucket = f'sf-dataplatform-redshift-unloads-{os.environ.get("SF_ENV", "lo
 
 
 def get_columns(conn_id, object_name):
-    params = {
-        'schema_name': object_name.split('.')[0],
-        'table_name': object_name.split('.')[1]
-    }
+    schema_name, table_name = object_name.split('.')
+    params = { 'schema_name': schema_name, 'table_name': table_name }
+
+    hook = PostgresHook(connection=override_postgres_cursor(conn_id, 'namedtuplecursor'))
+
     columns = []
-    for ordinal_position, column_name, data_type, character_maximum_length, numeric_precision, numeric_scale in \
-            PostgresHook(conn_id).get_records(get_columns_sql, params):
-        columns.append([ordinal_position, column_name,
-                        convert_datatype(data_type, character_maximum_length, numeric_precision, numeric_scale)])
-    return columns
+    for column_spec in hook.get_records(get_columns_sql, params):
+        columns.append({
+            'ordinal_position': column_spec.ordinal_position,
+            'name': column_spec.column_name,
+            'datatype': convert_datatype(column_spec.data_type, column_spec.character_maximum_length,
+                                         column_spec.numeric_precision, column_spec.numeric_scale)
+        })
 
-
-def forward_unload_params(context):
-    ti = context['ti']
-    pprint(vars(ti.task), indent=2)
-    ti.xcom_push('s3_bucket', ti.task.s3_bucket)
-    ti.xcom_push('s3_key', ti.task.s3_key)
-    ti.xcom_push('s3_uri', f's3://{ti.task.s3_bucket}/{ti.task.s3_key}')
+    get_current_context()['ti'].xcom_push('columns', columns)
 
 
 def generate_tasks(dag, src_conn_id, unload_object, unload_config):
     schema, table = unload_object.split('.')
 
-    if unload_config['unload_type'] == 'full':
-        table_columns = PythonOperator(
-            task_id=f'get_columns-{unload_object}',
-            do_xcom_push=True,
-            python_callable=get_columns,
-            op_args=[src_conn_id, unload_object]
-        )
+    table_columns = PythonOperator(
+        task_id=f'get_columns-{unload_object}',
+        do_xcom_push=True,
+        python_callable=get_columns,
+        op_args=[src_conn_id, unload_object]
+    )
 
+    if unload_config['unload_type'] == 'full':
         unload_data = RedshiftToS3Operator(
-            task_id=f'unload_data-{unload_object}',
+            task_id=f'unload_full-{unload_object}',
             s3_bucket=unload_bucket,
             s3_key='jg/raw/{{ params.schema }}_{{ params.table }}/{{ ts_nodash }}/{{ macros.datetime.utcnow().timestamp() | int }}/',
             redshift_conn_id=src_conn_id,
@@ -70,14 +66,14 @@ def generate_tasks(dag, src_conn_id, unload_object, unload_config):
             table_as_file_name=False,
             unload_options=['PARQUET'],
             params={'schema': schema, 'table': table},
-            on_execute_callback=forward_unload_params
+            on_execute_callback=(lambda context: push_values(context, ['schema', 'table', 's3_bucket', 's3_key']))
         )
 
-        create_table = DummyOperator(task_id=f'create_table-{unload_object}')
-        start_msck_repair = DummyOperator(task_id=f'start_msck_repair-{unload_object}')
-        monitor_msck_repair = DummyOperator(task_id=f'monitor_msck_repair-{unload_object}')
-        [table_columns, unload_data] >> create_table >> start_msck_repair >> monitor_msck_repair
-        return [[table_columns, unload_data], monitor_msck_repair]
+    create_table = DummyOperator(task_id=f'create_table-{unload_object}')
+    start_msck_repair = DummyOperator(task_id=f'start_msck_repair-{unload_object}')
+    monitor_msck_repair = DummyOperator(task_id=f'monitor_msck_repair-{unload_object}')
+    [table_columns, unload_data] >> create_table >> start_msck_repair >> monitor_msck_repair
+    return [[table_columns, unload_data], monitor_msck_repair]
 
 
 def generate_dag(dag_id, dag_config):
