@@ -26,6 +26,8 @@ get_columns_sql = sql_dir.joinpath('get_columns.sql').read_text()
 
 unload_bucket = f'sf-dataplatform-redshift-unloads-{os.environ.get("SF_ENV", "local")}'
 
+full_key_template = 'raw/{{ params.schema }}_{{ params.table }}/{{ ts_nodash }}/{{ macros.datetime.utcnow().timestamp() | int }}/'
+
 
 def get_columns(conn_id, object_name):
     schema_name, table_name = object_name.split('.')
@@ -59,14 +61,14 @@ def generate_tasks(dag, src_conn_id, unload_object, unload_config):
         unload_data = RedshiftToS3Operator(
             task_id=f'unload_full-{unload_object}',
             s3_bucket=unload_bucket,
-            s3_key='jg/raw/{{ params.schema }}_{{ params.table }}/{{ ts_nodash }}/{{ macros.datetime.utcnow().timestamp() | int }}/',
+            s3_key=full_key_template,
             redshift_conn_id=src_conn_id,
             schema=schema,
             table=table,
             table_as_file_name=False,
             unload_options=['PARQUET'],
             params={'schema': schema, 'table': table},
-            on_execute_callback=(lambda context: push_values(context, ['schema', 'table', 's3_bucket', 's3_key']))
+            on_execute_callback=push_values(['schema', 'table', 's3_bucket', 's3_key'])
         )
 
     create_table = DummyOperator(task_id=f'create_table-{unload_object}')
