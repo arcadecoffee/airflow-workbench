@@ -17,6 +17,9 @@ airflow users create \
 export AIRFLOW__CORE__DAGS_FOLDER=${PWD}/dags
 export AIRFLOW__CORE__PLUGINS_FOLDER=${PWD}/plugins
 
+cat $AIRFLOW_HOME/airflow-scheduler.pid | xargs kill
+cat $AIRFLOW_HOME/airflow-webserver.pid | xargs kill
+
 # start the web server, default port is 8080
 airflow webserver --port 8080 -D
 

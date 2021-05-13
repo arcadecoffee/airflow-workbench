@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -7,11 +8,11 @@ from airflow import DAG
 from airflow.operators.dummy import DummyOperator
 from airflow.operators.python import PythonOperator, get_current_context
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.providers.amazon.aws.transfers.redshift_to_s3 import RedshiftToS3Operator
 from airflow.utils.dates import days_ago
 
 from airflow.models.connection import Connection
 
+from custom_operators.enhanced_redshift_to_s3 import EnhancedRedshiftToS3Operator
 from helpers.airflow_helpers import push_values, override_postgres_cursor
 from helpers.datatype_converter import convert_datatype
 
@@ -23,10 +24,11 @@ config_file = base_dir.joinpath('unload_configs.yaml')
 configs = yaml.load(config_file.read_text(), Loader=yaml.BaseLoader)
 
 get_columns_sql = sql_dir.joinpath('get_columns.sql').read_text()
+unload_full_sql = sql_dir.joinpath('templates', 'unload-full.sql.jinja2').read_text()
 
 unload_bucket = f'sf-dataplatform-redshift-unloads-{os.environ.get("SF_ENV", "local")}'
 
-full_key_template = 'raw/{{ params.schema }}_{{ params.table }}/{{ ts_nodash }}/{{ macros.datetime.utcnow().timestamp() | int }}/'
+full_key_template = 'raw/{{ params.schema }}_{{ params.table }}/{{ ds_nodash }}/{{ macros.datetime.utcnow().timestamp() | int }}/'
 
 
 def get_columns(conn_id, object_name):
@@ -58,17 +60,21 @@ def generate_tasks(dag, src_conn_id, unload_object, unload_config):
     )
 
     if unload_config['unload_type'] == 'full':
-        unload_data = RedshiftToS3Operator(
+        unload_data = EnhancedRedshiftToS3Operator(
             task_id=f'unload_full-{unload_object}',
             s3_bucket=unload_bucket,
             s3_key=full_key_template,
             redshift_conn_id=src_conn_id,
-            schema=schema,
-            table=table,
+            iam_role='arn:aws:iam::850077434821:role/redshift-data-platform-s3',
+            select_query='sql/templates/unload-full.sql.jinja2', #unload_full_sql,
             table_as_file_name=False,
             unload_options=['PARQUET'],
-            params={'schema': schema, 'table': table},
-            on_execute_callback=push_values(['schema', 'table', 's3_bucket', 's3_key'])
+            params={
+                'schema': schema,
+                'table': table,
+                'origin_key': f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')}|s3_key|{dag.dag_id}:{os.getenv('VERSION')}"
+            },
+            on_execute_callback=push_values(['schema', 'table', 's3_bucket', 's3_key', 'select_query'])
         )
 
     create_table = DummyOperator(task_id=f'create_table-{unload_object}')
