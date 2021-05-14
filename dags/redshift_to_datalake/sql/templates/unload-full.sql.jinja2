@@ -1,4 +1,4 @@
-{% extends 'sql/templates/unload_base.sql.jinja2' %}
+{% extends 'sql/templates/unload-base.sql.jinja2' %}
 {% block select_statement %}
 SELECT {{ _columns | join(", ") }}
 FROM {{ params.schema }}.{{ params.table }}
