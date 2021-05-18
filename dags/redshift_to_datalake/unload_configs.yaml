@@ -1,4 +1,8 @@
-unload_dwh:
-  redshift-crunch:
+connection_aliases:
+  - &crunch-cluster redshift-crunch
+
+dags:
+  unload_dwh:
     dwh.dim_page_type:
+      connection_id: *crunch-cluster
       unload_type: full

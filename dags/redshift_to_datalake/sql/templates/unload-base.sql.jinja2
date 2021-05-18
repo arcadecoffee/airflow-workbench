@@ -1,5 +1,0 @@
-{%- set _origin_key = "''" + ([ts, dag.dag_id, ti.task_id, ti.try_number] | join('|')) + "'' as origin_key" -%}
-{%- set _columns = ti.xcom_pull(key='columns') | sort(attribute='ordinal_position') | map(attribute='column_name') |
-    list + [_origin_key] -%}
-{% block select_statement %}
-{% endblock %}

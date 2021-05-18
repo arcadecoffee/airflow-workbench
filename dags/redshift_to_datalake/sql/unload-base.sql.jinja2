@@ -1,0 +1,4 @@
+{%- set _columns = ti.xcom_pull(key=params.column_src_key, task_ids=params.column_src_task) |
+    sort(attribute='ordinal_position') | map(attribute='column_name') | list -%}
+{% block select_statement %}
+{% endblock %}

@@ -1,0 +1,12 @@
+{%- set _sorted_columns = ti.xcom_pull(task_ids=params.column_src_task, key=params.column_src_key) |
+    sort(attribute='ordinal_position') -%}
+{%- set _s3_bucket = ti.xcom_pull(task_ids=params.s3_src_task, key=params.s3_src_bucket) -%}
+{%- set _s3_key = ti.xcom_pull(task_ids=params.s3_src_task, key=params.s3_src_key) -%}
+CREATE EXTERNAL TABLE {{ params.database }}.{{ params.schema }}_{{ params.table }} (
+{%- for column in _sorted_columns %}
+  `{{ column['column_name'] }}` {{ column['athena_datatype'] }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
+LOCATION 's3://{{ _s3_bucket }}/{{ _s3_key }}'
+;
